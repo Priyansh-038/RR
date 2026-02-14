@@ -24,7 +24,10 @@ export default function Lobby() {
   const { isConnected, players, room, gameState, selectRole, toggleReady, startGame, sendInput } = useGameSocket({
     code: params?.code || "",
     name: sessionData.name,
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
     sessionId: sessionData.sessionId,
+=======
+>>>>>>> main
   });
 
   const [copied, setCopied] = useState(false);

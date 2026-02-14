@@ -8,7 +8,11 @@ import { randomUUID } from "crypto";
 const TICK_RATE = 20;
 const ROOM_SIZE = { width: 800, height: 600 };
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
 type GamePhase = "courtyard" | "dungeon" | "boss" | "cleared";
+=======
+type GamePhase = 'courtyard' | 'dungeon' | 'boss' | 'cleared';
+>>>>>>> main
 
 interface RuntimePlayerState {
   id: number;
@@ -18,13 +22,21 @@ interface RuntimePlayerState {
   y: number;
   health: number;
   maxHealth: number;
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
   facing: "left" | "right";
+=======
+  facing: 'left' | 'right';
+>>>>>>> main
   isAttacking: boolean;
 }
 
 interface RuntimeEnemyState {
   id: string;
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
   type: "goblin" | "orc" | "boss";
+=======
+  type: 'goblin' | 'orc' | 'boss';
+>>>>>>> main
   x: number;
   y: number;
   health: number;
@@ -57,9 +69,12 @@ interface SocketMeta {
   sessionId: string;
 }
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
 const activeGames = new Map<number, GameRoomState>();
 const socketMeta = new Map<WebSocket, SocketMeta>();
 
+=======
+>>>>>>> main
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.post(api.rooms.create.path, async (_req, res) => {
     const room = await storage.createRoom();
@@ -71,7 +86,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { code, name } = api.rooms.join.input.parse(req.body);
       const room = await storage.getRoomByCode(code);
       if (!room) return res.status(404).json({ message: "Room not found" });
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
       if (room.status !== "waiting") return res.status(400).json({ message: "Game already in progress" });
+=======
+      if (room.status !== 'waiting') return res.status(400).json({ message: "Game already in progress" });
+>>>>>>> main
 
       const existingPlayers = await storage.getPlayersInRoom(room.id);
       if (existingPlayers.length >= 5) return res.status(400).json({ message: "Room is full" });
@@ -86,9 +105,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         isReady: false,
       });
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
       return res.json({ roomId: room.id, sessionId, playerId: player.id });
     } catch {
       return res.status(400).json({ message: "Invalid request" });
+=======
+      res.json({ roomId: room.id, sessionId, playerId: player.id });
+    } catch {
+      res.status(400).json({ message: "Invalid request" });
+>>>>>>> main
     }
   });
 
@@ -98,13 +123,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(room);
   });
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+=======
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+>>>>>>> main
 
   wss.on("connection", (ws) => {
     ws.on("message", async (data) => {
       try {
         const message = JSON.parse(data.toString());
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
         if (message.type === "join") {
           const { code, name, sessionId: incomingSessionId } = message.payload;
           const room = await storage.getRoomByCode(code);
@@ -125,22 +155,51 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (!player) {
             if (players.length >= 5) {
               ws.send(JSON.stringify({ type: "error", payload: { message: "Room is full" } }));
+=======
+        if (message.type === 'join') {
+          const { code, name } = message.payload;
+          const room = await storage.getRoomByCode(code);
+          if (!room) {
+            ws.send(JSON.stringify({ type: 'error', payload: { message: 'Room not found' } }));
+            return;
+          }
+
+          roomId = room.id;
+          const existingPlayers = await storage.getPlayersInRoom(roomId);
+          let player = existingPlayers.find((p) => p.name === name);
+
+          if (!player) {
+            if (existingPlayers.length >= 5) {
+              ws.send(JSON.stringify({ type: 'error', payload: { message: 'Room is full' } }));
+>>>>>>> main
               return;
             }
 
             const newSessionId = randomUUID();
             player = await storage.addPlayer({
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
               roomId: room.id,
               name,
               sessionId: newSessionId,
               role: null,
               isHost: players.length === 0,
+=======
+              roomId,
+              name,
+              sessionId,
+              role: null,
+              isHost: existingPlayers.length === 0,
+>>>>>>> main
               isReady: false,
             });
           }
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
           socketMeta.set(ws, { roomId: room.id, sessionId: player.sessionId });
           await broadcastRoomUpdate(room.id);
+=======
+          await broadcastRoomUpdate(roomId);
+>>>>>>> main
           return;
         }
 
@@ -156,6 +215,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             (p) => p.role === message.payload.role && p.id !== player.id,
           );
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
           if (roleTakenByOther) {
             ws.send(
               JSON.stringify({ type: "error", payload: { message: "That role is already taken in this room." } }),
@@ -216,6 +276,76 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             if (x < 0) p.facing = "left";
           }
 
+=======
+        if (message.type === 'select_role') {
+          const player = await storage.getPlayerBySessionId(sessionId);
+          if (!player) return;
+
+          const playersInRoom = await storage.getPlayersInRoom(roomId);
+          const roleTakenByOther = playersInRoom.some(
+            (p) => p.role === message.payload.role && p.id !== player.id,
+          );
+
+          if (roleTakenByOther) {
+            ws.send(JSON.stringify({ type: 'error', payload: { message: 'That role is already taken in this room.' } }));
+            return;
+          }
+
+          if (player.isReady) {
+            ws.send(JSON.stringify({ type: 'error', payload: { message: 'Unready first to switch roles.' } }));
+            return;
+          }
+
+          await storage.updatePlayerRole(player.id, message.payload.role);
+          await broadcastRoomUpdate(roomId);
+          return;
+        }
+
+        if (message.type === 'ready') {
+          const player = await storage.getPlayerBySessionId(sessionId);
+          if (!player) return;
+
+          if (message.payload.isReady && !player.role) {
+            ws.send(JSON.stringify({ type: 'error', payload: { message: 'Choose a role first.' } }));
+            return;
+          }
+
+          await storage.updatePlayerReady(player.id, message.payload.isReady);
+          await broadcastRoomUpdate(roomId);
+          await maybeStartGame(roomId);
+          return;
+        }
+
+        if (message.type === 'start_game') {
+          await maybeStartGame(roomId, true, sessionId, ws);
+          return;
+        }
+
+        if (message.type === 'input') {
+          const game = activeGames.get(roomId);
+          if (!game || game.status !== 'playing') return;
+
+          const p = game.players.get(sessionId);
+          if (!p || p.health <= 0) return;
+
+          const speed = 5;
+          const { x, y, attack } = message.payload;
+
+          let dx = x;
+          let dy = y;
+          if (dx !== 0 || dy !== 0) {
+            const len = Math.sqrt(dx * dx + dy * dy);
+            dx /= len;
+            dy /= len;
+            p.x += dx * speed;
+            p.y += dy * speed;
+            p.x = Math.max(20, Math.min(game.width - 20, p.x));
+            p.y = Math.max(20, Math.min(game.height - 20, p.y));
+            if (dx > 0) p.facing = 'right';
+            if (dx < 0) p.facing = 'left';
+          }
+
+>>>>>>> main
           if (attack && !p.isAttacking) {
             p.isAttacking = true;
             setTimeout(() => {
@@ -224,15 +354,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
             game.enemies.forEach((e) => {
               const dist = Math.sqrt((e.x - p.x) ** 2 + (e.y - p.y) ** 2);
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
               if (dist < 60) e.health -= e.type === "boss" ? 12 : 20;
+=======
+              if (dist < 60) e.health -= e.type === 'boss' ? 12 : 20;
+>>>>>>> main
             });
           }
         }
       } catch (e) {
-        console.error("WS Error", e);
+        console.error('WS Error', e);
       }
     });
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
     ws.on("close", async () => {
       const meta = socketMeta.get(ws);
       socketMeta.delete(ws);
@@ -246,13 +381,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.updateRoomStatus(meta.roomId, "finished");
       } else {
         await broadcastRoomUpdate(meta.roomId);
+=======
+    ws.on('close', async () => {
+      if (!sessionId || !roomId) return;
+      await storage.removePlayer(sessionId);
+      const players = await storage.getPlayersInRoom(roomId);
+      if (players.length === 0) {
+        activeGames.delete(roomId);
+        await storage.updateRoomStatus(roomId, 'finished');
+      } else {
+        await broadcastRoomUpdate(roomId);
+>>>>>>> main
       }
     });
   });
 
   async function maybeStartGame(roomId: number, manual = false, requesterSessionId?: string, ws?: WebSocket) {
     const room = await storage.getRoom(roomId);
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
     if (!room || room.status !== "waiting" || activeGames.has(roomId)) return;
+=======
+    if (!room || room.status !== 'waiting' || activeGames.has(roomId)) return;
+>>>>>>> main
 
     const players = await storage.getPlayersInRoom(roomId);
     if (players.length < 1) return;
@@ -264,33 +414,53 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (manual) {
       const requester = players.find((p) => p.sessionId === requesterSessionId);
       if (!requester?.isHost) {
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
         ws?.send(JSON.stringify({ type: "error", payload: { message: "Only host can manually start." } }));
+=======
+        ws?.send(JSON.stringify({ type: 'error', payload: { message: 'Only host can manually start.' } }));
+>>>>>>> main
         return;
       }
     }
 
     if (!allReady || !allHaveRole || !uniqueRoles) {
       if (manual) {
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
         ws?.send(
           JSON.stringify({ type: "error", payload: { message: "Everyone must be ready with unique roles." } }),
         );
+=======
+        ws?.send(JSON.stringify({ type: 'error', payload: { message: 'Everyone must be ready with unique roles.' } }));
+>>>>>>> main
       }
       return;
     }
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
     await storage.updateRoomStatus(roomId, "playing");
+=======
+    await storage.updateRoomStatus(roomId, 'playing');
+>>>>>>> main
 
     const gamePlayers = new Map<string, RuntimePlayerState>();
     players.forEach((p, index) => {
       gamePlayers.set(p.sessionId, {
         id: p.id,
         name: p.name,
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
         role: p.role || "swordsman",
+=======
+        role: p.role || 'swordsman',
+>>>>>>> main
         x: 180 + index * 36,
         y: ROOM_SIZE.height / 2,
         health: 100,
         maxHealth: 100,
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
         facing: "right",
+=======
+        facing: 'right',
+>>>>>>> main
         isAttacking: false,
       });
     });
@@ -299,11 +469,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       players: gamePlayers,
       enemies: [],
       projectiles: [],
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
       status: "playing",
       wave: 0,
       width: ROOM_SIZE.width,
       height: ROOM_SIZE.height,
       phase: "courtyard",
+=======
+      status: 'playing',
+      wave: 0,
+      width: ROOM_SIZE.width,
+      height: ROOM_SIZE.height,
+      phase: 'courtyard',
+>>>>>>> main
       phaseStartedAt: Date.now(),
     });
 
@@ -316,6 +494,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const room = await storage.getRoom(roomId);
     if (!room) return;
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
     const message = JSON.stringify({ type: "room_update", payload: { players, room } });
     broadcastToRoom(roomId, message);
   }
@@ -329,10 +508,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const meta = socketMeta.get(client);
       if (client.readyState === WebSocket.OPEN && meta?.roomId === roomId) {
         client.send(message);
-      }
+=======
+    const message = JSON.stringify({ type: 'room_update', payload: { players, room } });
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) client.send(message);
     });
   }
 
+  function spawnWaveEnemies(game: GameRoomState) {
+    if (game.phase === 'dungeon') {
+      const type = game.wave === 1 ? 'goblin' : 'orc';
+      const count = game.wave === 1 ? 4 : 3;
+      for (let i = 0; i < count; i++) {
+        game.enemies.push({
+          id: randomUUID(),
+          type,
+          x: 520 + Math.random() * 220,
+          y: 80 + Math.random() * (game.height - 160),
+          health: type === 'goblin' ? 60 : 120,
+          maxHealth: type === 'goblin' ? 60 : 120,
+        });
+>>>>>>> main
+      }
+    }
+
+    if (game.phase === 'boss') {
+      game.enemies.push({
+        id: randomUUID(),
+        type: 'boss',
+        x: game.width - 120,
+        y: game.height / 2,
+        health: 600,
+        maxHealth: 600,
+      });
+    }
+  }
+
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
   function spawnWaveEnemies(game: GameRoomState) {
     if (game.phase === "dungeon") {
       const type = game.wave === 1 ? "goblin" : "orc";
@@ -361,6 +573,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   }
 
+=======
+>>>>>>> main
   function startGameLoop(roomId: number) {
     const interval = setInterval(() => {
       const game = activeGames.get(roomId);
@@ -371,6 +585,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const now = Date.now();
 
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
       if (game.phase === "courtyard") {
         const doorX = game.width - 120;
         const nearDoor = Array.from(game.players.values()).some(
@@ -379,25 +594,53 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         if (nearDoor || now - game.phaseStartedAt > 7000) {
           game.phase = "dungeon";
+=======
+      // Phase flow: courtyard -> dungeon small -> dungeon medium -> boss -> cleared
+      if (game.phase === 'courtyard') {
+        const doorX = game.width - 120;
+        const nearDoor = Array.from(game.players.values()).some((p) =>
+          Math.sqrt((p.x - doorX) ** 2 + (p.y - game.height / 2) ** 2) < 70,
+        );
+
+        if (nearDoor || now - game.phaseStartedAt > 7000) {
+          game.phase = 'dungeon';
+>>>>>>> main
           game.wave = 1;
           game.phaseStartedAt = now;
           spawnWaveEnemies(game);
         }
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
       } else if (game.phase === "dungeon" && game.enemies.length === 0) {
+=======
+      } else if (game.phase === 'dungeon' && game.enemies.length === 0) {
+>>>>>>> main
         if (game.wave === 1) {
           game.wave = 2;
           spawnWaveEnemies(game);
         } else {
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
           game.phase = "boss";
+=======
+          game.phase = 'boss';
+>>>>>>> main
           game.wave = 3;
           game.phaseStartedAt = now;
           spawnWaveEnemies(game);
         }
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
       } else if (game.phase === "boss" && game.enemies.length === 0) {
         game.phase = "cleared";
         game.status = "won";
       }
 
+=======
+      } else if (game.phase === 'boss' && game.enemies.length === 0) {
+        game.phase = 'cleared';
+        game.status = 'won';
+      }
+
+      // Enemy AI + combat
+>>>>>>> main
       game.enemies.forEach((e) => {
         let nearestDist = Infinity;
         let target: RuntimePlayerState | null = null;
@@ -416,13 +659,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const dy = target.y - e.y;
           const len = Math.sqrt(dx * dx + dy * dy);
           if (len > 0) {
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
             const speed = e.type === "boss" ? 1.6 : e.type === "orc" ? 1.9 : 2.3;
+=======
+            const speed = e.type === 'boss' ? 1.6 : e.type === 'orc' ? 1.9 : 2.3;
+>>>>>>> main
             e.x += (dx / len) * speed;
             e.y += (dy / len) * speed;
           }
 
           if (nearestDist < 30) {
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
             target.health -= e.type === "boss" ? 1.0 : e.type === "orc" ? 0.7 : 0.45;
+=======
+            target.health -= e.type === 'boss' ? 1.0 : e.type === 'orc' ? 0.7 : 0.45;
+>>>>>>> main
           }
         }
       });
@@ -463,16 +714,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           })),
           projectiles: game.projectiles.map((proj) => ({
             id: proj.id,
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
             type: "slash",
+=======
+            type: 'slash',
+>>>>>>> main
             position: { x: proj.x, y: proj.y },
           })),
           status: game.status,
           wave: game.wave,
           phase: game.phase,
         },
+<<<<<<< codex/implement-unique-player-roles-and-game-flow-b397an
       });
 
       broadcastGameState(roomId, stateUpdate);
+=======
+      });
+
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) client.send(stateUpdate);
+      });
+>>>>>>> main
     }, 1000 / TICK_RATE);
   }
 
