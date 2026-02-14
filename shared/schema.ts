@@ -73,6 +73,7 @@ export interface GameState {
   projectiles: ProjectileState[];
   status: 'playing' | 'won' | 'lost';
   wave: number;
+  phase: 'courtyard' | 'dungeon' | 'boss' | 'cleared';
 }
 
 // === WS MESSAGES ===
