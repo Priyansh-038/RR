@@ -1,34 +1,39 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
+import { type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
-import { z } from "zod";
 import { randomUUID } from "crypto";
 
-// Game Loop Frequency
-const TICK_RATE = 20; // updates per second
+const TICK_RATE = 20;
+const ROOM_SIZE = { width: 800, height: 600 };
+
+type GamePhase = 'courtyard' | 'dungeon' | 'boss' | 'cleared';
+
+interface RuntimePlayerState {
+  id: number;
+  name: string;
+  role: string;
+  x: number;
+  y: number;
+  health: number;
+  maxHealth: number;
+  facing: 'left' | 'right';
+  isAttacking: boolean;
+}
+
+interface RuntimeEnemyState {
+  id: string;
+  type: 'goblin' | 'orc' | 'boss';
+  x: number;
+  y: number;
+  health: number;
+  maxHealth: number;
+}
 
 interface GameRoomState {
-  players: Map<string, {
-    x: number;
-    y: number;
-    role: string;
-    health: number;
-    maxHealth: number;
-    lastAttack: number;
-    facing: 'left' | 'right';
-    isAttacking: boolean;
-  }>;
-  enemies: Array<{
-    id: string;
-    type: string;
-    x: number;
-    y: number;
-    health: number;
-    maxHealth: number;
-    targetId?: string;
-  }>;
+  players: Map<string, RuntimePlayerState>;
+  enemies: RuntimeEnemyState[];
   projectiles: Array<{
     id: string;
     type: string;
@@ -43,17 +48,14 @@ interface GameRoomState {
   wave: number;
   width: number;
   height: number;
+  phase: GamePhase;
+  phaseStartedAt: number;
 }
 
 const activeGames = new Map<number, GameRoomState>();
 
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express
-): Promise<Server> {
-
-  // === REST API ===
-  app.post(api.rooms.create.path, async (req, res) => {
+export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  app.post(api.rooms.create.path, async (_req, res) => {
     const room = await storage.createRoom();
     res.status(201).json({ code: room.code, roomId: room.id });
   });
@@ -62,32 +64,24 @@ export async function registerRoutes(
     try {
       const { code, name } = api.rooms.join.input.parse(req.body);
       const room = await storage.getRoomByCode(code);
-      
-      if (!room) {
-        return res.status(404).json({ message: "Room not found" });
-      }
-
-      if (room.status !== 'waiting') {
-        return res.status(400).json({ message: "Game already in progress" });
-      }
+      if (!room) return res.status(404).json({ message: "Room not found" });
+      if (room.status !== 'waiting') return res.status(400).json({ message: "Game already in progress" });
 
       const existingPlayers = await storage.getPlayersInRoom(room.id);
-      if (existingPlayers.length >= 5) {
-        return res.status(400).json({ message: "Room is full" });
-      }
+      if (existingPlayers.length >= 5) return res.status(400).json({ message: "Room is full" });
 
       const sessionId = randomUUID();
       const player = await storage.addPlayer({
         roomId: room.id,
         name,
         sessionId,
-        role: "swordsman", // Default
+        role: null,
         isHost: existingPlayers.length === 0,
-        isReady: false
+        isReady: false,
       });
 
       res.json({ roomId: room.id, sessionId, playerId: player.id });
-    } catch (err) {
+    } catch {
       res.status(400).json({ message: "Invalid request" });
     }
   });
@@ -98,7 +92,6 @@ export async function registerRoutes(
     res.json(room);
   });
 
-  // === WEBSOCKET SERVER ===
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
   wss.on('connection', (ws) => {
@@ -109,186 +102,238 @@ export async function registerRoutes(
       try {
         const message = JSON.parse(data.toString());
 
-        // --- AUTH/JOIN ---
         if (message.type === 'join') {
           const { code, name } = message.payload;
-          
           const room = await storage.getRoomByCode(code);
           if (!room) {
-            ws.send(JSON.stringify({ type: 'error', payload: { message: "Room not found" } }));
+            ws.send(JSON.stringify({ type: 'error', payload: { message: 'Room not found' } }));
             return;
           }
-          roomId = room.id;
 
-          // In a real app, we'd use a better session tracking, 
-          // but for now we find or create player by name in this room
+          roomId = room.id;
           const existingPlayers = await storage.getPlayersInRoom(roomId);
-          let player = existingPlayers.find(p => p.name === name);
-          
+          let player = existingPlayers.find((p) => p.name === name);
+
           if (!player) {
             if (existingPlayers.length >= 5) {
-              ws.send(JSON.stringify({ type: 'error', payload: { message: "Room is full" } }));
+              ws.send(JSON.stringify({ type: 'error', payload: { message: 'Room is full' } }));
               return;
             }
             sessionId = randomUUID();
             player = await storage.addPlayer({
-              roomId: roomId,
+              roomId,
               name,
               sessionId,
-              role: "swordsman",
+              role: null,
               isHost: existingPlayers.length === 0,
-              isReady: false
+              isReady: false,
             });
           } else {
             sessionId = player.sessionId;
           }
 
-          // Broadcast room update to EVERYONE
-          broadcastRoomUpdate(roomId);
+          await broadcastRoomUpdate(roomId);
+          return;
         }
 
         if (!roomId || !sessionId) return;
 
-        // --- LOBBY ACTIONS ---
         if (message.type === 'select_role') {
           const player = await storage.getPlayerBySessionId(sessionId);
-          if (player) {
-            await storage.updatePlayerRole(player.id, message.payload.role);
-            broadcastRoomUpdate(roomId);
+          if (!player) return;
+
+          const playersInRoom = await storage.getPlayersInRoom(roomId);
+          const roleTakenByOther = playersInRoom.some(
+            (p) => p.role === message.payload.role && p.id !== player.id,
+          );
+
+          if (roleTakenByOther) {
+            ws.send(JSON.stringify({ type: 'error', payload: { message: 'That role is already taken in this room.' } }));
+            return;
           }
+
+          if (player.isReady) {
+            ws.send(JSON.stringify({ type: 'error', payload: { message: 'Unready first to switch roles.' } }));
+            return;
+          }
+
+          await storage.updatePlayerRole(player.id, message.payload.role);
+          await broadcastRoomUpdate(roomId);
+          return;
         }
 
         if (message.type === 'ready') {
           const player = await storage.getPlayerBySessionId(sessionId);
-          if (player) {
-            await storage.updatePlayerReady(player.id, message.payload.isReady);
-            broadcastRoomUpdate(roomId);
+          if (!player) return;
+
+          if (message.payload.isReady && !player.role) {
+            ws.send(JSON.stringify({ type: 'error', payload: { message: 'Choose a role first.' } }));
+            return;
           }
+
+          await storage.updatePlayerReady(player.id, message.payload.isReady);
+          await broadcastRoomUpdate(roomId);
+          await maybeStartGame(roomId);
+          return;
         }
 
         if (message.type === 'start_game') {
-          const player = await storage.getPlayerBySessionId(sessionId);
-          if (player && player.isHost) {
-             await storage.updateRoomStatus(roomId, 'playing');
-             
-             // Initialize Game State
-             const players = await storage.getPlayersInRoom(roomId);
-             const gamePlayers = new Map();
-             players.forEach(p => {
-                gamePlayers.set(p.sessionId, {
-                  x: 400, y: 300, // Center spawn
-                  role: p.role,
-                  health: 100, // TODO: vary by role
-                  maxHealth: 100,
-                  lastAttack: 0,
-                  facing: 'right',
-                  isAttacking: false
-                });
-             });
-
-             activeGames.set(roomId, {
-               players: gamePlayers,
-               enemies: [],
-               projectiles: [],
-               status: 'playing',
-               wave: 1,
-               width: 800,
-               height: 600
-             });
-
-             broadcastRoomUpdate(roomId);
-             startGameLoop(roomId);
-          }
+          await maybeStartGame(roomId, true, sessionId, ws);
+          return;
         }
 
-        // --- GAME INPUT ---
         if (message.type === 'input') {
           const game = activeGames.get(roomId);
-          if (game && game.status === 'playing') {
-             const p = game.players.get(sessionId);
-             if (p) {
-               // Update velocity/position based on input (simplified)
-               // In a real authoritative server, we'd apply physics here
-               // For now, let's just accept the client's intent vector and move them
-               const speed = 5;
-               const { x, y, attack } = message.payload; // input vector -1 to 1
-               
-               // Normalize
-               let dx = x;
-               let dy = y;
-               if (dx !== 0 || dy !== 0) {
-                 const len = Math.sqrt(dx*dx + dy*dy);
-                 dx /= len;
-                 dy /= len;
-                 p.x += dx * speed;
-                 p.y += dy * speed;
-                 
-                 // Bounds
-                 p.x = Math.max(20, Math.min(game.width - 20, p.x));
-                 p.y = Math.max(20, Math.min(game.height - 20, p.y));
+          if (!game || game.status !== 'playing') return;
 
-                 if (dx > 0) p.facing = 'right';
-                 if (dx < 0) p.facing = 'left';
-               }
+          const p = game.players.get(sessionId);
+          if (!p || p.health <= 0) return;
 
-               if (attack && !p.isAttacking) {
-                 p.isAttacking = true;
-                 setTimeout(() => { if (p) p.isAttacking = false; }, 200);
-                 
-                 // Handle Hit detection here or in game loop
-                 // Simple melee check
-                 game.enemies.forEach(e => {
-                   const dist = Math.sqrt((e.x - p.x)**2 + (e.y - p.y)**2);
-                   if (dist < 60) {
-                     e.health -= 20;
-                   }
-                 });
-               }
-             }
+          const speed = 5;
+          const { x, y, attack } = message.payload;
+
+          let dx = x;
+          let dy = y;
+          if (dx !== 0 || dy !== 0) {
+            const len = Math.sqrt(dx * dx + dy * dy);
+            dx /= len;
+            dy /= len;
+            p.x += dx * speed;
+            p.y += dy * speed;
+            p.x = Math.max(20, Math.min(game.width - 20, p.x));
+            p.y = Math.max(20, Math.min(game.height - 20, p.y));
+            if (dx > 0) p.facing = 'right';
+            if (dx < 0) p.facing = 'left';
+          }
+
+          if (attack && !p.isAttacking) {
+            p.isAttacking = true;
+            setTimeout(() => {
+              p.isAttacking = false;
+            }, 200);
+
+            game.enemies.forEach((e) => {
+              const dist = Math.sqrt((e.x - p.x) ** 2 + (e.y - p.y) ** 2);
+              if (dist < 60) e.health -= e.type === 'boss' ? 12 : 20;
+            });
           }
         }
-
       } catch (e) {
-        console.error("WS Error", e);
+        console.error('WS Error', e);
       }
     });
 
     ws.on('close', async () => {
-      if (sessionId && roomId) {
-        await storage.removePlayer(sessionId);
-        const players = await storage.getPlayersInRoom(roomId);
-        if (players.length === 0) {
-          activeGames.delete(roomId);
-          await storage.updateRoomStatus(roomId, 'finished');
-        } else {
-          broadcastRoomUpdate(roomId);
-        }
+      if (!sessionId || !roomId) return;
+      await storage.removePlayer(sessionId);
+      const players = await storage.getPlayersInRoom(roomId);
+      if (players.length === 0) {
+        activeGames.delete(roomId);
+        await storage.updateRoomStatus(roomId, 'finished');
+      } else {
+        await broadcastRoomUpdate(roomId);
       }
     });
   });
+
+  async function maybeStartGame(roomId: number, manual = false, requesterSessionId?: string, ws?: WebSocket) {
+    const room = await storage.getRoom(roomId);
+    if (!room || room.status !== 'waiting' || activeGames.has(roomId)) return;
+
+    const players = await storage.getPlayersInRoom(roomId);
+    if (players.length < 1) return;
+
+    const allReady = players.every((p) => p.isReady);
+    const allHaveRole = players.every((p) => !!p.role);
+    const uniqueRoles = new Set(players.map((p) => p.role)).size === players.length;
+
+    if (manual) {
+      const requester = players.find((p) => p.sessionId === requesterSessionId);
+      if (!requester?.isHost) {
+        ws?.send(JSON.stringify({ type: 'error', payload: { message: 'Only host can manually start.' } }));
+        return;
+      }
+    }
+
+    if (!allReady || !allHaveRole || !uniqueRoles) {
+      if (manual) {
+        ws?.send(JSON.stringify({ type: 'error', payload: { message: 'Everyone must be ready with unique roles.' } }));
+      }
+      return;
+    }
+
+    await storage.updateRoomStatus(roomId, 'playing');
+
+    const gamePlayers = new Map<string, RuntimePlayerState>();
+    players.forEach((p, index) => {
+      gamePlayers.set(p.sessionId, {
+        id: p.id,
+        name: p.name,
+        role: p.role || 'swordsman',
+        x: 180 + index * 36,
+        y: ROOM_SIZE.height / 2,
+        health: 100,
+        maxHealth: 100,
+        facing: 'right',
+        isAttacking: false,
+      });
+    });
+
+    activeGames.set(roomId, {
+      players: gamePlayers,
+      enemies: [],
+      projectiles: [],
+      status: 'playing',
+      wave: 0,
+      width: ROOM_SIZE.width,
+      height: ROOM_SIZE.height,
+      phase: 'courtyard',
+      phaseStartedAt: Date.now(),
+    });
+
+    await broadcastRoomUpdate(roomId);
+    startGameLoop(roomId);
+  }
 
   async function broadcastRoomUpdate(roomId: number) {
     const players = await storage.getPlayersInRoom(roomId);
     const room = await storage.getRoom(roomId);
     if (!room) return;
 
-    const message = JSON.stringify({
-      type: 'room_update',
-      payload: { players, room }
-    });
-
-    // Broadcast to all clients in this room
-    // Note: In a real app we need to map RoomID -> Set<WebSocket>
-    // For this simple version, we're iterating all clients (inefficient but works for small scale)
-    wss.clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        // We'd check if client belongs to room, but we haven't stored that mapping in memory efficiently here
-        // Ideally: client.roomId === roomId
-        client.send(message); 
-      }
+    const message = JSON.stringify({ type: 'room_update', payload: { players, room } });
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) client.send(message);
     });
   }
-  
+
+  function spawnWaveEnemies(game: GameRoomState) {
+    if (game.phase === 'dungeon') {
+      const type = game.wave === 1 ? 'goblin' : 'orc';
+      const count = game.wave === 1 ? 4 : 3;
+      for (let i = 0; i < count; i++) {
+        game.enemies.push({
+          id: randomUUID(),
+          type,
+          x: 520 + Math.random() * 220,
+          y: 80 + Math.random() * (game.height - 160),
+          health: type === 'goblin' ? 60 : 120,
+          maxHealth: type === 'goblin' ? 60 : 120,
+        });
+      }
+    }
+
+    if (game.phase === 'boss') {
+      game.enemies.push({
+        id: randomUUID(),
+        type: 'boss',
+        x: game.width - 120,
+        y: game.height / 2,
+        health: 600,
+        maxHealth: 600,
+      });
+    }
+  }
+
   function startGameLoop(roomId: number) {
     const interval = setInterval(() => {
       const game = activeGames.get(roomId);
@@ -297,29 +342,44 @@ export async function registerRoutes(
         return;
       }
 
-      // 1. Spawn Enemies (Wave logic)
-      if (game.enemies.length === 0) {
-        // Spawn wave
-        for (let i = 0; i < game.wave * 2; i++) {
-          game.enemies.push({
-            id: randomUUID(),
-            type: game.wave % 5 === 0 ? 'boss' : 'goblin',
-            x: Math.random() * game.width,
-            y: Math.random() * game.height,
-            health: game.wave % 5 === 0 ? 500 : 50,
-            maxHealth: game.wave % 5 === 0 ? 500 : 50,
-          });
+      const now = Date.now();
+
+      // Phase flow: courtyard -> dungeon small -> dungeon medium -> boss -> cleared
+      if (game.phase === 'courtyard') {
+        const doorX = game.width - 120;
+        const nearDoor = Array.from(game.players.values()).some((p) =>
+          Math.sqrt((p.x - doorX) ** 2 + (p.y - game.height / 2) ** 2) < 70,
+        );
+
+        if (nearDoor || now - game.phaseStartedAt > 7000) {
+          game.phase = 'dungeon';
+          game.wave = 1;
+          game.phaseStartedAt = now;
+          spawnWaveEnemies(game);
         }
-        game.wave++;
+      } else if (game.phase === 'dungeon' && game.enemies.length === 0) {
+        if (game.wave === 1) {
+          game.wave = 2;
+          spawnWaveEnemies(game);
+        } else {
+          game.phase = 'boss';
+          game.wave = 3;
+          game.phaseStartedAt = now;
+          spawnWaveEnemies(game);
+        }
+      } else if (game.phase === 'boss' && game.enemies.length === 0) {
+        game.phase = 'cleared';
+        game.status = 'won';
       }
 
-      // 2. Enemy Logic (Chase players)
-      game.enemies.forEach(e => {
-        // Find nearest player
+      // Enemy AI + combat
+      game.enemies.forEach((e) => {
         let nearestDist = Infinity;
-        let target = null;
+        let target: RuntimePlayerState | null = null;
+
         for (const p of Array.from(game.players.values())) {
-          const d = Math.sqrt((p.x - e.x)**2 + (p.y - e.y)**2);
+          if (p.health <= 0) continue;
+          const d = Math.sqrt((p.x - e.x) ** 2 + (p.y - e.y) ** 2);
           if (d < nearestDist) {
             nearestDist = d;
             target = p;
@@ -327,59 +387,69 @@ export async function registerRoutes(
         }
 
         if (target) {
-           const dx = target.x - e.x;
-           const dy = target.y - e.y;
-           const len = Math.sqrt(dx*dx + dy*dy);
-           if (len > 0) {
-             const speed = e.type === 'boss' ? 1.5 : 2;
-             e.x += (dx/len) * speed;
-             e.y += (dy/len) * speed;
-           }
+          const dx = target.x - e.x;
+          const dy = target.y - e.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len > 0) {
+            const speed = e.type === 'boss' ? 1.6 : e.type === 'orc' ? 1.9 : 2.3;
+            e.x += (dx / len) * speed;
+            e.y += (dy / len) * speed;
+          }
 
-           // Damage Player
-           if (nearestDist < 30) {
-             target.health -= 0.5; // Constant drain on contact
-           }
-        }
-        
-        if (e.health <= 0) {
-           // Remove enemy
-           // We'll filter later
+          if (nearestDist < 30) {
+            target.health -= e.type === 'boss' ? 1.0 : e.type === 'orc' ? 0.7 : 0.45;
+          }
         }
       });
-      
-      game.enemies = game.enemies.filter(e => e.health > 0);
 
-      // 3. Cleanup dead players (respawn logic or game over)
-      // For now, just keep them at 0 health
+      game.enemies = game.enemies.filter((e) => e.health > 0);
+
       let aliveCount = 0;
       for (const p of Array.from(game.players.values())) {
         if (p.health <= 0) p.health = 0;
         else aliveCount++;
       }
-      
+
       if (aliveCount === 0 && game.players.size > 0) {
         game.status = 'lost';
       }
 
-      // 4. Broadcast State
       const stateUpdate = JSON.stringify({
         type: 'game_state',
         payload: {
-          players: Array.from(game.players.entries()).map(([sid, p]) => ({...p, sessionId: sid})),
-          enemies: game.enemies,
-          projectiles: game.projectiles,
+          players: Array.from(game.players.entries()).map(([sid, p]) => ({
+            id: p.id,
+            sessionId: sid,
+            name: p.name,
+            role: p.role,
+            position: { x: p.x, y: p.y },
+            health: p.health,
+            maxHealth: p.maxHealth,
+            isDead: p.health <= 0,
+            facing: p.facing,
+            isAttacking: p.isAttacking,
+          })),
+          enemies: game.enemies.map((e) => ({
+            id: e.id,
+            type: e.type,
+            position: { x: e.x, y: e.y },
+            health: e.health,
+            maxHealth: e.maxHealth,
+          })),
+          projectiles: game.projectiles.map((proj) => ({
+            id: proj.id,
+            type: 'slash',
+            position: { x: proj.x, y: proj.y },
+          })),
           status: game.status,
-          wave: game.wave
-        }
+          wave: game.wave,
+          phase: game.phase,
+        },
       });
 
-      wss.clients.forEach(client => {
-         if (client.readyState === WebSocket.OPEN) {
-           client.send(stateUpdate);
-         }
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) client.send(stateUpdate);
       });
-
     }, 1000 / TICK_RATE);
   }
 
