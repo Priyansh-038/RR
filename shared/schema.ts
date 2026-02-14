@@ -78,7 +78,7 @@ export interface GameState {
 
 // === WS MESSAGES ===
 export type WsMessage = 
-  | { type: 'join', payload: { code: string, name: string } }
+  | { type: 'join', payload: { code: string, name: string, sessionId?: string } }
   | { type: 'select_role', payload: { role: Role } }
   | { type: 'ready', payload: { isReady: boolean } }
   | { type: 'start_game' }

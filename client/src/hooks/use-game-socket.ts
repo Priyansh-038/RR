@@ -12,10 +12,11 @@ import { useToast } from "@/hooks/use-toast";
 interface UseGameSocketProps {
   code: string;
   name: string;
+  sessionId?: string;
   onGameStart?: () => void;
 }
 
-export function useGameSocket({ code, name, onGameStart }: UseGameSocketProps) {
+export function useGameSocket({ code, name, sessionId, onGameStart }: UseGameSocketProps) {
   const { toast } = useToast();
   const socketRef = useRef<WebSocket | null>(null);
   
@@ -38,7 +39,7 @@ export function useGameSocket({ code, name, onGameStart }: UseGameSocketProps) {
       setIsConnected(true);
       setError(null);
       // Join room immediately on connect
-      sendMessage({ type: "join", payload: { code, name } });
+      sendMessage({ type: "join", payload: { code, name, sessionId } });
     };
 
     ws.onclose = () => {
@@ -79,7 +80,7 @@ export function useGameSocket({ code, name, onGameStart }: UseGameSocketProps) {
         console.error("Failed to parse WS message", e);
       }
     };
-  }, [code, name, onGameStart, toast]);
+  }, [code, name, sessionId, onGameStart, toast]);
 
   useEffect(() => {
     connect();
