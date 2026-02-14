@@ -73,11 +73,12 @@ export interface GameState {
   projectiles: ProjectileState[];
   status: 'playing' | 'won' | 'lost';
   wave: number;
+  phase: 'courtyard' | 'dungeon' | 'boss' | 'cleared';
 }
 
 // === WS MESSAGES ===
 export type WsMessage = 
-  | { type: 'join', payload: { code: string, name: string } }
+  | { type: 'join', payload: { code: string, name: string, sessionId?: string } }
   | { type: 'select_role', payload: { role: Role } }
   | { type: 'ready', payload: { isReady: boolean } }
   | { type: 'start_game' }
